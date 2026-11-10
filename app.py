@@ -1,143 +1,80 @@
-elif menu=="Poultry Batches":
-    st.subheader("Poultry Batch Management / মুরগির ব্যাচ")
+import streamlit as st
+import sqlite3, os
+from datetime import date, datetime
+from pathlib import Path
+import pandas as pd
 
-    with st.form("pb"):
-        x1,x2=st.columns(2)
-        name=x1.text_input("Batch name / ব্যাচের নাম")
-        typ=x2.selectbox(
-            "Bird type / মুরগির ধরন",
-            ["Color Bird","Fumi","Broiler","Layer","Other"]
-        )
-        x3,x4=st.columns(2)
-        sd=x3.date_input("Start date / শুরুর তারিখ",date.today())
-        qty=x4.number_input(
-            "Opening chicks / প্রাথমিক বাচ্চা",
-            min_value=1,step=1
-        )
-        cost=st.number_input(
-            "Chick purchase cost (BDT)",
-            min_value=0.0
-        )
-        notes=st.text_area("Notes / মন্তব্য")
+APP_DIR = Path(_file_).resolve().parent
+DB = APP_DIR / "nafsin_agro.db"
+st.set_page_config(page_title="Nafsin Agro Valley", page_icon="🌱", layout="wide")
 
-        if st.form_submit_button("Save batch / ব্যাচ সংরক্ষণ"):
-            if name.strip():
-                run(
-                    """INSERT INTO poultry_batches
-                    (batch_name,bird_type,start_date,opening_birds,purchase_cost,notes)
-                    VALUES(?,?,?,?,?,?)""",
-                    (name.strip(),typ,str(sd),qty,cost,notes)
-                )
-                st.success("Batch saved successfully.")
-                st.rerun()
-            else:
-                st.error("Batch name is required.")
+def conn():
+    c=sqlite3.connect(DB)
+    c.row_factory=sqlite3.Row
+    return c
 
-    st.divider()
-    st.subheader("Saved Poultry Batches / সংরক্ষিত ব্যাচ")
+def init():
+    with conn() as c:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS poultry_batches(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, batch_name TEXT, bird_type TEXT,
+          start_date TEXT, opening_birds INTEGER, purchase_cost REAL DEFAULT 0, notes TEXT);
+        CREATE TABLE IF NOT EXISTS poultry_daily(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id INTEGER, entry_date TEXT,
+          mortality INTEGER DEFAULT 0, feed_kg REAL DEFAULT 0, avg_weight_g REAL DEFAULT 0,
+          medicine_cost REAL DEFAULT 0, other_cost REAL DEFAULT 0, notes TEXT);
+        CREATE TABLE IF NOT EXISTS ponds(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, pond_name TEXT, area_decimal REAL DEFAULT 0,
+          depth_ft REAL DEFAULT 0, species TEXT, stocking_date TEXT, stocked_fish INTEGER DEFAULT 0,
+          stocking_cost REAL DEFAULT 0, notes TEXT);
+        CREATE TABLE IF NOT EXISTS fish_daily(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, pond_id INTEGER, entry_date TEXT,
+          mortality INTEGER DEFAULT 0, feed_kg REAL DEFAULT 0, avg_weight_g REAL DEFAULT 0,
+          medicine_cost REAL DEFAULT 0, other_cost REAL DEFAULT 0, ph REAL, do_mg REAL, temp_c REAL, notes TEXT);
+        CREATE TABLE IF NOT EXISTS transactions(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, txn_date TEXT, txn_type TEXT,
+          category TEXT, description TEXT, amount REAL, payment_account TEXT DEFAULT 'Cash');
+        CREATE TABLE IF NOT EXISTS accounts(
+          code TEXT PRIMARY KEY, name TEXT, account_type TEXT);
+        CREATE TABLE IF NOT EXISTS journal(
+          id INTEGER PRIMARY KEY AUTOINCREMENT, txn_id INTEGER, txn_date TEXT,
+          account_code TEXT, debit REAL DEFAULT 0, credit REAL DEFAULT 0, memo TEXT);
+        """)
+        defaults=[
+        ('1000','Cash','Asset'),('1010','Bank','Asset'),('1200','Inventory','Asset'),
+        ('2000','Accounts Payable','Liability'),('3000','Owner Capital','Equity'),
+        ('4000','Farm Sales','Income'),('5000','Feed Expense','Expense'),
+        ('5100','Medicine Expense','Expense'),('5200','Chick/Fish Stock Expense','Expense'),
+        ('5300','Other Farm Expense','Expense')]
+        for x in defaults:
+            c.execute("INSERT OR IGNORE INTO accounts VALUES(?,?,?)",x)
+init()
 
-    rows=q("SELECT * FROM poultry_batches ORDER BY id DESC")
+def q(sql,args=()):
+    with conn() as c: return c.execute(sql,args).fetchall()
+def run(sql,args=()):
+    with conn() as c:
+        cur=c.execute(sql,args); c.commit(); return cur.lastrowid
+def money(x): return f"৳{float(x or 0):,.2f}"
+def tr(en,bn):
+    return f"{bn} / {en}" if st.session_state.get("lang","বাংলা")=="বাংলা" else en
 
-    if rows:
-        df=pd.DataFrame([dict(x) for x in rows])
-        st.dataframe(df,use_container_width=True)
+st.sidebar.title("🌱 Nafsin Agro Valley")
+st.sidebar.caption("Farm Management System • V1.0")
+st.sidebar.selectbox("Language / ভাষা",["বাংলা","English"],key="lang")
+menu=st.sidebar.radio("Menu / মেনু",[
+"Dashboard","Poultry Batches","Poultry Daily Entry","Fish Ponds","Fish Daily Entry",
+"Accounts & Transactions","Accounting Reports","Data Backup"])
+st.sidebar.caption("Currency: BDT (৳) • Local database")
 
-        opts={
-            f'ID {x["id"]} | {x["batch_name"]} | {x["bird_type"]}':
-            x["id"] for x in rows
-        }
+st.title("🌱 NAFSIN AGRO VALLEY")
+st.caption("Integrated Poultry & Fish Farm Management | Version 1.0")
 
-        selected=st.selectbox(
-            "Select batch to Edit or Delete",
-            list(opts.keys()),
-            key="selected_poultry_batch"
-        )
-        batch_id=opts[selected]
-
-        batch=q(
-            "SELECT * FROM poultry_batches WHERE id=?",
-            (batch_id,)
-        )[0]
-
-        st.markdown("### Edit Batch / ব্যাচ সংশোধন")
-
-        with st.form("edit_poultry_batch"):
-            new_name=st.text_input(
-                "Batch name",
-                value=batch["batch_name"] or ""
-            )
-            types=["Color Bird","Fumi","Broiler","Layer","Other"]
-            old_type=batch["bird_type"] or "Other"
-            type_index=types.index(old_type) if old_type in types else 4
-            new_type=st.selectbox(
-                "Bird type",types,index=type_index
-            )
-            new_date=st.date_input(
-                "Start date",
-                value=date.fromisoformat(batch["start_date"])
-                if batch["start_date"] else date.today()
-            )
-            new_qty=st.number_input(
-                "Opening chicks",
-                min_value=1,
-                value=max(1,int(batch["opening_birds"] or 1))
-            )
-            new_cost=st.number_input(
-                "Purchase cost",
-                min_value=0.0,
-                value=float(batch["purchase_cost"] or 0)
-            )
-            new_notes=st.text_area(
-                "Notes",
-                value=batch["notes"] or ""
-            )
-
-            if st.form_submit_button("Update Batch / সংশোধন সংরক্ষণ"):
-                if new_name.strip():
-                    run(
-                        """UPDATE poultry_batches
-                        SET batch_name=?,bird_type=?,start_date=?,
-                        opening_birds=?,purchase_cost=?,notes=?
-                        WHERE id=?""",
-                        (
-                            new_name.strip(),new_type,str(new_date),
-                            new_qty,new_cost,new_notes,batch_id
-                        )
-                    )
-                    st.success("Batch updated successfully.")
-                    st.rerun()
-                else:
-                    st.error("Batch name is required.")
-
-        st.divider()
-        st.markdown("### Delete Batch / ব্যাচ মুছুন")
-
-        daily_count=q(
-            "SELECT COUNT(*) AS total FROM poultry_daily WHERE batch_id=?",
-            (batch_id,)
-        )[0]["total"]
-
-        if daily_count > 0:
-            st.warning(
-                f"This batch has {daily_count} daily records. "
-                "Delete is blocked to protect your farm records."
-            )
-        else:
-            confirm=st.checkbox(
-                f"I confirm deletion of Batch ID {batch_id}",
-                key=f"confirm_delete_batch_{batch_id}"
-            )
-
-            if st.button(
-                "Delete Selected Batch / নির্বাচিত ব্যাচ মুছুন",
-                type="primary",
-                disabled=not confirm
-            ):
-                run(
-                    "DELETE FROM poultry_batches WHERE id=?",
-                    (batch_id,)
-                )
-                st.success("Batch deleted successfully.")
-                st.rerun()
-    else:
-        st.info("No poultry batches found.")
+if menu=="Dashboard":
+    st.subheader(tr("Farm Dashboard","খামারের ড্যাশবোর্ড"))
+    batches=q("SELECT * FROM poultry_batches")
+    ponds=q("SELECT * FROM ponds")
+    birds=sum(x["opening_birds"] for x in batches)
+    pmort=sum(x["mortality"] for x in q("SELECT mortality FROM poultry_daily"))
+    fstock=sum(x["stocked_fish"] for x in ponds)
+    fmor…
